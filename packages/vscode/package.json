@@ -1,0 +1,78 @@
+{
+  "name": "at-reference-support",
+  "displayName": "At Reference Support",
+  "description": "Navigate and validate @path/to/file references in markdown files",
+  "version": "0.1.0",
+  "publisher": "at-reference",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Linters"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "markdown",
+    "reference",
+    "navigation"
+  ],
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "At Reference Support",
+      "properties": {
+        "atReference.enableDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show errors for invalid @ references"
+        },
+        "atReference.enableCompletion": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable file path autocomplete when typing @"
+        },
+        "atReference.enableHover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show file preview on hover"
+        },
+        "atReference.exclude": {
+          "type": "array",
+          "default": [
+            "**/node_modules/**",
+            "**/.git/**"
+          ],
+          "description": "Patterns to exclude from completion suggestions"
+        },
+        "atReference.previewLines": {
+          "type": "number",
+          "default": 10,
+          "description": "Number of lines to show in hover preview"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "watch": "pnpm build --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package --no-dependencies",
+    "vscode:prepublish": "pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@at-reference/core": "workspace:*"
+  }
+}
