@@ -9,6 +9,7 @@ dist/
 .idea/
 .vscode/
 !.vscode/extensions.json
+!packages/vscode/.vscode/
 
 # OS
 .DS_Store
