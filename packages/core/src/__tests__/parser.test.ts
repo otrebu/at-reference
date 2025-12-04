@@ -114,4 +114,53 @@ describe('extractReferences', () => {
     const refs = extractReferences('@file1.ts @file2.ts @file3.ts');
     assert.strictEqual(refs.length, 3);
   });
+
+  it('ignores reference inside inline code (backticks)', () => {
+    const refs = extractReferences('See `@src/file.ts` for example');
+    assert.strictEqual(refs.length, 0);
+  });
+
+  it('ignores reference inside fenced code block', () => {
+    const refs = extractReferences('```\n@src/file.ts\n```');
+    assert.strictEqual(refs.length, 0);
+  });
+
+  it('ignores reference inside fenced code block with language', () => {
+    const refs = extractReferences('```typescript\nimport from "@src/file.ts"\n```');
+    assert.strictEqual(refs.length, 0);
+  });
+
+  it('extracts reference outside backticks but ignores one inside', () => {
+    const refs = extractReferences('See @real/file.ts and `@fake/file.ts`');
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0]?.path, 'real/file.ts');
+  });
+
+  it('handles multiple inline code spans', () => {
+    const refs = extractReferences('Use `@a/b.ts` or `@c/d.ts` but @real/ref.ts works');
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0]?.path, 'real/ref.ts');
+  });
+
+  it('handles code block followed by real reference', () => {
+    const refs = extractReferences('```\n@code/block.ts\n```\nSee @real/file.ts');
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0]?.path, 'real/file.ts');
+  });
+
+  it('handles inline code at start of text', () => {
+    const refs = extractReferences('`@src/file.ts` is the path');
+    assert.strictEqual(refs.length, 0);
+  });
+
+  it('handles inline code at end of text', () => {
+    const refs = extractReferences('The path is `@src/file.ts`');
+    assert.strictEqual(refs.length, 0);
+  });
+
+  it('extracts reference when backticks are not paired', () => {
+    const refs = extractReferences('See @src/file.ts in `unclosed code');
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0]?.path, 'src/file.ts');
+  });
 });

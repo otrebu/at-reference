@@ -13,6 +13,58 @@ const AT_REFERENCE_PATTERN = /(?:^|[\s\[\(\{])(@(?:\.{0,2}\/)?[\w\-./]+)/gm;
 const EMAIL_PATTERN = /^[\w.-]+@[\w.-]+\.[a-z]{2,}$/i;
 
 /**
+ * Find all code span ranges in the content (backtick enclosed regions)
+ * Handles both fenced code blocks (```) and inline code (`)
+ */
+function findCodeSpanRanges(content: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+
+  // Match fenced code blocks first (``` ... ```) as they take precedence
+  const codeBlockPattern = /```[\s\S]*?```/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = codeBlockPattern.exec(content)) !== null) {
+    ranges.push({
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+
+  // Match inline code (` ... `) but not inside code blocks
+  // Handles single backticks with non-empty content
+  const inlineCodePattern = /`[^`\n]+`/g;
+
+  while ((match = inlineCodePattern.exec(content)) !== null) {
+    const matchStart = match.index;
+    const matchEnd = match.index + match[0].length;
+
+    // Check if this inline code is inside a code block
+    const isInsideCodeBlock = ranges.some(
+      range => matchStart >= range.start && matchEnd <= range.end
+    );
+
+    if (!isInsideCodeBlock) {
+      ranges.push({
+        start: matchStart,
+        end: matchEnd,
+      });
+    }
+  }
+
+  return ranges;
+}
+
+/**
+ * Check if an offset falls within any code span
+ */
+function isInsideCodeSpan(
+  offset: number,
+  codeRanges: Array<{ start: number; end: number }>
+): boolean {
+  return codeRanges.some(range => offset >= range.start && offset < range.end);
+}
+
+/**
  * Check if a path looks like a valid reference (has / or file extension)
  */
 function isValidReferencePath(path: string): boolean {
@@ -96,6 +148,7 @@ export function extractReferences(
   const { zeroIndexed = false } = options;
   const references: AtReference[] = [];
   const lineOffsets = buildLineOffsets(content);
+  const codeSpanRanges = findCodeSpanRanges(content);
 
   AT_REFERENCE_PATTERN.lastIndex = 0;
 
@@ -108,6 +161,11 @@ export function extractReferences(
 
     const leadingChars = fullMatch.length - refMatch.length;
     const refStart = match.index + leadingChars;
+
+    // Skip references inside code spans (backticks)
+    if (isInsideCodeSpan(refStart, codeSpanRanges)) {
+      continue;
+    }
 
     if (looksLikeEmail(content, refStart)) {
       continue;
