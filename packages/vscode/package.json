@@ -23,6 +23,46 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "atReference.compileFile",
+        "title": "Compile @References",
+        "category": "At Reference"
+      },
+      {
+        "command": "atReference.compileFolder",
+        "title": "Compile @References in Folder",
+        "category": "At Reference"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "atReference.compileFile",
+          "when": "resourceLangId == markdown",
+          "group": "atReference@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "atReference.compileFile",
+          "when": "resourceLangId == markdown",
+          "group": "atReference@1"
+        },
+        {
+          "command": "atReference.compileFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "atReference@2"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "atReference.compileFile",
+          "when": "resourceLangId == markdown",
+          "group": "atReference@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "At Reference Support",
       "properties": {
