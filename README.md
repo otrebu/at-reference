@@ -7,6 +7,23 @@ Tooling for Claude Code's `@path/to/file` syntax.
 - **@at-reference/core** - TypeScript library for parsing and validating @ references
 - **at-reference-support** - VS Code/Cursor extension for navigation and validation
 
+## Prerequisites
+
+### For CLI Development (@at-reference/core)
+- **Node.js** 20 or higher
+- **pnpm** 9.0.0 (specified in packageManager)
+
+### For VS Code Extension Development (at-reference-support)
+- **Node.js** 20 or higher
+- **pnpm** 9.0.0
+- **VS Code** 1.85.0 or higher (for development/testing)
+- **@vscode/vsce** (included in dev dependencies) for packaging .vsix files
+
+### Build Tools (handled by dependencies)
+- **tsup** - bundler for core library
+- **esbuild** - bundler for VS Code extension
+- **TypeScript** 5.3+
+
 ## Quick Start
 
 ```bash
@@ -74,6 +91,8 @@ Then in VS Code: Extensions > ... > Install from VSIX
 
 ### Using the CLI
 
+#### Validation
+
 After building:
 
 ```bash
@@ -85,6 +104,28 @@ cd packages/core
 pnpm link --global
 at-ref CLAUDE.md
 ```
+
+#### Compile
+
+The `compile` command expands @references inline by replacing them with actual file contents wrapped in markdown code blocks. This creates self-contained documentation with all referenced code included.
+
+After building:
+
+```bash
+# Compile a single file (creates CLAUDE.built.md)
+node packages/core/dist/cli.js compile CLAUDE.md
+
+# With custom output path
+node packages/core/dist/cli.js compile CLAUDE.md --output expanded.md
+
+# Compile all markdown files in a directory
+node packages/core/dist/cli.js compile docs/
+
+# Or use globally linked command
+at-ref compile CLAUDE.md
+```
+
+Compiled files include syntax-highlighted code blocks at each @reference location, with HTML comment markers preserving the original reference path.
 
 ## Features
 
