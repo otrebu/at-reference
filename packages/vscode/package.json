@@ -98,12 +98,12 @@
     }
   },
   "scripts": {
-    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap && vsce package --no-dependencies",
     "watch": "pnpm build --watch",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "package": "vsce package --no-dependencies",
-    "vscode:prepublish": "pnpm build"
+    "vscode:prepublish": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

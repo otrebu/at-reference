@@ -7,6 +7,7 @@ import { formatValidationResult, formatSummary } from './formatter';
 import { compileFile, getBuiltOutputPath } from './compiler';
 import type { ValidationResult } from './types';
 import type { CompileResult } from './compiler';
+import { buildReferenceTree, formatTree } from './tree-formatter';
 
 /**
  * Find workspace root by looking for .git directory
@@ -41,6 +42,8 @@ interface CompileCliOptions {
   output?: string;
   noColor: boolean;
   workspaceRootPath?: string;
+  skipFrontmatter: boolean;
+  optimizeDuplicates: boolean;
   help: boolean;
 }
 
@@ -80,6 +83,8 @@ Check Options:
 
 Compile Options:
   --output <p>            Output path (for single file only)
+  --skip-frontmatter      Skip @refs in front matter & strip it from output
+  --optimize-duplicates   Only import each file once, use references for duplicates
   --no-color              Disable colored output
   --workspace-root-path   Explicit workspace root path
   --help                  Show this help message
@@ -204,6 +209,8 @@ function parseCompileArgs(args: string[]): CompileCliOptions {
   const options: CompileCliOptions = {
     files: [],
     noColor: false,
+    skipFrontmatter: false,
+    optimizeDuplicates: false,
     help: false,
   };
 
@@ -215,6 +222,10 @@ function parseCompileArgs(args: string[]): CompileCliOptions {
       options.help = true;
     } else if (arg === '--no-color') {
       options.noColor = true;
+    } else if (arg === '--skip-frontmatter') {
+      options.skipFrontmatter = true;
+    } else if (arg === '--optimize-duplicates') {
+      options.optimizeDuplicates = true;
     } else if (arg === '--output' || arg === '-o') {
       i++;
       const outputPath = args[i];
@@ -254,21 +265,31 @@ function formatCompileResult(result: CompileResult, noColor: boolean): string {
 
   const lines: string[] = [];
 
-  lines.push(`${c.cyan}Compiling:${c.reset} ${result.inputPath}`);
-  lines.push(`${c.cyan}Output:${c.reset} ${result.outputPath}`);
+  // Header
+  lines.push(`${c.cyan}# ${path.basename(result.inputPath)}${c.reset}`);
   lines.push('');
 
-  for (const ref of result.references) {
-    if (ref.found) {
-      lines.push(`  ${c.green}✓${c.reset} ${ref.reference.raw} → ${c.dim}${ref.resolvedPath}${c.reset}`);
-    } else {
-      lines.push(`  ${c.red}✗${c.reset} ${ref.reference.raw} → ${c.red}${ref.error}${c.reset}`);
-    }
+  // Tree output if there are references
+  if (result.references.length > 0) {
+    lines.push(`${c.cyan}Resolved files:${c.reset}`);
+    const tree = buildReferenceTree(result.references, result.inputPath);
+    lines.push(formatTree(tree, { noColor }));
+    lines.push('');
   }
 
-  lines.push('');
-  const summary = `${c.green}${result.successCount} resolved${c.reset}, ${c.red}${result.failedCount} failed${c.reset}`;
-  lines.push(`Summary: ${summary}`);
+  // Summary with duplicates
+  const summary: string[] = [];
+  if (result.successCount > 0) {
+    summary.push(`${c.green}${result.successCount} resolved${c.reset}`);
+  }
+  if (result.failedCount > 0) {
+    summary.push(`${c.red}${result.failedCount} failed${c.reset}`);
+  }
+  if (result.importStats.duplicateFiles.length > 0) {
+    summary.push(`${c.yellow}${result.importStats.duplicateFiles.length} duplicates${c.reset}`);
+  }
+
+  lines.push(`${c.cyan}Summary:${c.reset} ${summary.join(', ')}`);
 
   if (result.written) {
     lines.push(`${c.green}✓${c.reset} Output written to ${result.outputPath}`);
@@ -318,7 +339,12 @@ async function runCompile(args: string[]) {
       const fileDir = path.dirname(path.resolve(file));
       const workspaceRoot = findWorkspaceRoot(fileDir, options.workspaceRootPath);
       const outputPath = options.output || getBuiltOutputPath(file);
-      const result = compileFile(file, { outputPath, basePath: workspaceRoot });
+      const result = compileFile(file, {
+        outputPath,
+        basePath: workspaceRoot,
+        skipFrontmatter: options.skipFrontmatter,
+        optimizeDuplicates: options.optimizeDuplicates
+      });
       results.push(result);
 
       console.log(formatCompileResult(result, options.noColor));
