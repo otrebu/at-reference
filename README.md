@@ -134,10 +134,43 @@ node packages/core/dist/cli.js compile docs/
 at-ref compile CLAUDE.md
 ```
 
+#### Folder Compilation
+
+Compile entire directories with **dependency-aware ordering** and **cross-file caching**:
+
+```bash
+# Compile all .md files in a directory (creates docs/dist/)
+# Frontmatter automatically skipped in folder mode
+at-ref compile docs/
+
+# Custom output directory
+at-ref compile docs/ --output-dir build/
+
+# With optimization for massive size reduction
+at-ref compile docs/ --optimize-duplicates
+```
+
+**How folder compilation works:**
+1. Scans all `.md` files in the directory recursively
+2. Builds a dependency graph from @references
+3. Topologically sorts files (dependencies compiled first, **bottom-up**)
+4. Shares compiled content cache across all files
+5. Mirrors directory structure in output
+6. **Automatically strips frontmatter** from all compiled files
+
+**Benefits:**
+- **Bottom-up compilation**: All dependencies available when compiling dependents
+- **Cross-file optimization**: With `--optimize-duplicates`, shared dependencies included once
+- **Structure preservation**: `docs/blocks/base.md` → `dist/blocks/base.md`
+- **Clean output**: YAML frontmatter automatically removed
+- **Massive size reduction**: For interconnected knowledge bases (64%+ with `--optimize-duplicates`)
+
 **Compile Options:**
 - `--skip-frontmatter` - Ignores @references in YAML front matter (between `---`) and strips front matter from output
 - `--optimize-duplicates` - Includes each file's content only once, uses `<file path="..." />` for subsequent references
-- `--output <path>` - Custom output file path (single file only)
+- `--output <path>` - Custom output file (single file only)
+- `--output-dir <path>` - Output directory (folder mode, default: `dist/`)
+- `--dist <path>` - Alias for `--output-dir`
 - `--no-color` - Disable colored output
 
 **Output Format:**
