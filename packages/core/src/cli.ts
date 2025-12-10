@@ -3,9 +3,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { validateFile } from './validator';
-import { formatValidationResult, formatSummary } from './formatter';
+import {
+  formatValidationResult,
+  formatSummary,
+  formatValidationSummary,
+  formatBrokenReferencesByTarget,
+  extractBrokenReferencesByTarget,
+} from './formatter';
 import { compileFile, compileFolder, getBuiltOutputPath } from './compiler';
-import type { ValidationResult } from './types';
+import type { ValidationResult, BrokenReferenceByTarget } from './types';
 import type { CompileResult, FolderCompileResult } from './compiler';
 import { buildReferenceTree, formatTree } from './tree-formatter';
 
@@ -34,6 +40,9 @@ interface CliOptions {
   quiet: boolean;
   ignore: string[];
   workspaceRootPath?: string;
+  shallow: boolean;
+  summary: boolean;
+  verbose: boolean;
   help: boolean;
 }
 
@@ -45,6 +54,7 @@ interface CompileCliOptions {
   workspaceRootPath?: string;
   skipFrontmatter: boolean;
   optimizeDuplicates: boolean;
+  verbose: boolean;
   help: boolean;
 }
 
@@ -53,6 +63,7 @@ interface CheckCliOptions {
   noColor: boolean;
   ignore: string[];
   workspaceRootPath?: string;
+  verbose: boolean;
   help: boolean;
 }
 
@@ -70,13 +81,17 @@ Commands:
   compile        Compile files by expanding @ references
 
 Validation Options:
+  --verbose, -v           Show all references (valid + broken)
+  --shallow               Fast, non-recursive validation (direct refs only)
+  --summary, -s           Show compact summary instead of per-file details
   --no-color              Disable colored output
-  --quiet                 Only show errors
+  --quiet                 Only show errors (incompatible with --summary)
   --ignore <p>            Ignore pattern (can be used multiple times)
   --workspace-root-path   Explicit workspace root path
   --help                  Show this help message
 
 Check Options:
+  --verbose, -v           Show all references (valid + broken) per file
   --no-color              Disable colored output
   --ignore <p>            Ignore pattern (can be used multiple times)
   --workspace-root-path   Explicit workspace root path
@@ -93,8 +108,11 @@ Compile Options:
   --help                  Show this help message
 
 Examples:
-  at-ref CLAUDE.md
-  at-ref docs/*.md
+  at-ref CLAUDE.md                             # Shows detailed view
+  at-ref docs/                                 # Shows per-file breakdown (default)
+  at-ref docs/ --summary                       # Shows compact stats (like compile)
+  at-ref docs/ --summary --shallow             # Fast summary (direct refs)
+  at-ref docs/ --quiet                         # Only files with errors
   at-ref . --quiet
   at-ref README.md --ignore "node_modules"
 
@@ -114,6 +132,9 @@ function parseArgs(args: string[]): CliOptions {
     noColor: false,
     quiet: false,
     ignore: [],
+    shallow: false,
+    summary: false,
+    verbose: false,
     help: false,
   };
 
@@ -123,10 +144,16 @@ function parseArgs(args: string[]): CliOptions {
 
     if (arg === '--help' || arg === '-h') {
       options.help = true;
+    } else if (arg === '--verbose' || arg === '-v') {
+      options.verbose = true;
     } else if (arg === '--no-color') {
       options.noColor = true;
     } else if (arg === '--quiet' || arg === '-q') {
       options.quiet = true;
+    } else if (arg === '--shallow') {
+      options.shallow = true;
+    } else if (arg === '--summary' || arg === '-s') {
+      options.summary = true;
     } else if (arg === '--ignore') {
       i++;
       const pattern = args[i];
@@ -215,6 +242,7 @@ function parseCompileArgs(args: string[]): CompileCliOptions {
     noColor: false,
     skipFrontmatter: false,
     optimizeDuplicates: false,
+    verbose: false,
     help: false,
   };
 
@@ -226,6 +254,8 @@ function parseCompileArgs(args: string[]): CompileCliOptions {
       options.help = true;
     } else if (arg === '--no-color') {
       options.noColor = true;
+    } else if (arg === '--verbose') {
+      options.verbose = true;
     } else if (arg === '--skip-frontmatter') {
       options.skipFrontmatter = true;
     } else if (arg === '--optimize-duplicates') {
@@ -268,7 +298,7 @@ const colors = {
   dim: '\x1b[2m',
 };
 
-function formatCompileResult(result: CompileResult, noColor: boolean): string {
+function formatCompileResult(result: CompileResult, noColor: boolean, verbose: boolean = false): string {
   const c = noColor
     ? { reset: '', green: '', red: '', yellow: '', cyan: '', dim: '' }
     : colors;
@@ -279,8 +309,8 @@ function formatCompileResult(result: CompileResult, noColor: boolean): string {
   lines.push(`${c.cyan}# ${path.basename(result.inputPath)}${c.reset}`);
   lines.push('');
 
-  // Tree output if there are references
-  if (result.references.length > 0) {
+  // Tree output only in verbose mode
+  if (verbose && result.references.length > 0) {
     lines.push(`${c.cyan}Resolved files:${c.reset}`);
     const tree = buildReferenceTree(result.references, result.inputPath);
     lines.push(formatTree(tree, { noColor }));
@@ -326,6 +356,75 @@ function findCommonAncestor(paths: string[]): string {
   }
 
   return commonParts.join(path.sep) || path.sep;
+}
+
+/**
+ * Extract broken references from folder compilation results
+ */
+function extractBrokenReferencesFromCompileResults(
+  results: CompileResult[]
+): BrokenReferenceByTarget[] {
+  const brokenByTarget = new Map<
+    string,
+    {
+      targetPath: string;
+      raw: string;
+      error: string;
+      sources: Array<{ file: string; line: number; column: number }>;
+    }
+  >();
+
+  for (const result of results) {
+    for (const ref of result.references) {
+      if (!ref.found) {
+        const targetPath = ref.resolvedPath;
+
+        if (!brokenByTarget.has(targetPath)) {
+          brokenByTarget.set(targetPath, {
+            targetPath,
+            raw: ref.reference.raw,
+            error: ref.error || 'File not found',
+            sources: [],
+          });
+        }
+
+        brokenByTarget.get(targetPath)!.sources.push({
+          file: result.inputPath,
+          line: ref.reference.line,
+          column: ref.reference.column,
+        });
+      }
+    }
+  }
+
+  return Array.from(brokenByTarget.values());
+}
+
+function formatPerFileResults(results: CompileResult[], noColor: boolean): string {
+  const c = noColor
+    ? { reset: '', green: '', red: '', yellow: '', cyan: '', dim: '' }
+    : colors;
+
+  const lines: string[] = [];
+  lines.push(`${c.cyan}Per-file compilation results:${c.reset}`);
+  lines.push('');
+
+  for (const result of results) {
+    const fileName = path.basename(result.inputPath);
+    const stats: string[] = [];
+
+    if (result.successCount > 0) {
+      stats.push(`${c.green}${result.successCount} resolved${c.reset}`);
+    }
+    if (result.failedCount > 0) {
+      stats.push(`${c.red}${result.failedCount} failed${c.reset}`);
+    }
+
+    const statusIcon = result.failedCount > 0 ? `${c.red}✗${c.reset}` : `${c.green}✓${c.reset}`;
+    lines.push(`  ${statusIcon} ${fileName} - ${stats.join(', ')}`);
+  }
+
+  return lines.join('\n');
 }
 
 function formatFolderResult(result: FolderCompileResult, noColor: boolean): string {
@@ -378,7 +477,23 @@ async function runSingleFileCompile(file: string, options: CompileCliOptions) {
       optimizeDuplicates: options.optimizeDuplicates
     });
 
-    console.log(formatCompileResult(result, options.noColor));
+    // Show broken references grouped by target (if any)
+    if (result.failedCount > 0) {
+      const brokenRefs = extractBrokenReferencesFromCompileResults([result]);
+      if (brokenRefs.length > 0) {
+        const brokenOutput = formatBrokenReferencesByTarget(brokenRefs, {
+          noColor: options.noColor,
+          cwd: process.cwd(),
+        });
+        if (brokenOutput) {
+          console.log(brokenOutput);
+          console.log('');
+        }
+      }
+    }
+
+    // Show compile result (tree in verbose mode, summary always)
+    console.log(formatCompileResult(result, options.noColor, options.verbose));
 
     process.exit(result.failedCount > 0 ? 1 : 0);
   } catch (err) {
@@ -406,6 +521,24 @@ async function runFolderCompile(inputPaths: string[], options: CompileCliOptions
       skipFrontmatter: true, // Default to true for folder mode
       optimizeDuplicates: options.optimizeDuplicates
     });
+
+    // In verbose mode, show per-file details
+    if (options.verbose) {
+      console.log(formatPerFileResults(result.results, options.noColor));
+      console.log('');
+    }
+
+    // Display broken references before success/failure message
+    const brokenRefs = extractBrokenReferencesFromCompileResults(result.results);
+    if (brokenRefs.length > 0) {
+      const brokenOutput = formatBrokenReferencesByTarget(brokenRefs, {
+        noColor: options.noColor,
+        cwd: process.cwd(),
+      });
+      if (brokenOutput) {
+        console.log(brokenOutput);
+      }
+    }
 
     console.log(formatFolderResult(result, options.noColor));
 
@@ -462,6 +595,7 @@ function parseCheckArgs(args: string[]): CheckCliOptions {
     path: '.',
     noColor: false,
     ignore: [],
+    verbose: false,
     help: false,
   };
 
@@ -471,6 +605,8 @@ function parseCheckArgs(args: string[]): CheckCliOptions {
 
     if (arg === '--help' || arg === '-h') {
       options.help = true;
+    } else if (arg === '--verbose' || arg === '-v') {
+      options.verbose = true;
     } else if (arg === '--no-color') {
       options.noColor = true;
     } else if (arg === '--ignore') {
@@ -573,6 +709,38 @@ async function runCheck(args: string[]) {
     }
   }
 
+  // Group broken references by target path
+  const brokenByTarget = new Map<
+    string,
+    {
+      targetPath: string;
+      raw: string;
+      error: string;
+      sources: Array<{ file: string; line: number; column: number }>;
+    }
+  >();
+
+  for (const [sourceFile, brokenLinks] of brokenByFile) {
+    for (const link of brokenLinks) {
+      const targetPath = link.reference.substring(1); // Remove @ prefix
+
+      if (!brokenByTarget.has(targetPath)) {
+        brokenByTarget.set(targetPath, {
+          targetPath,
+          raw: link.reference,
+          error: link.error,
+          sources: [],
+        });
+      }
+
+      brokenByTarget.get(targetPath)!.sources.push({
+        file: sourceFile,
+        line: link.line,
+        column: link.column,
+      });
+    }
+  }
+
   // Output results
   console.log(`${c.bold}@Reference Check Report${c.reset}`);
   console.log(`${c.dim}${'─'.repeat(50)}${c.reset}`);
@@ -584,18 +752,30 @@ async function runCheck(args: string[]) {
     process.exit(0);
   }
 
-  // List broken links by file
-  console.log(`${c.red}${c.bold}Broken References:${c.reset}\n`);
+  // VERBOSE MODE: Show per-file breakdown
+  if (options.verbose) {
+    console.log(`${c.cyan}${c.bold}Per-File Breakdown:${c.reset}\n`);
 
-  for (const [file, broken] of brokenByFile) {
-    const relativeFile = path.relative(process.cwd(), file) || file;
-    console.log(`${c.cyan}${relativeFile}${c.reset}`);
+    for (const [file, broken] of brokenByFile) {
+      const relativeFile = path.relative(process.cwd(), file) || file;
+      console.log(`${c.cyan}${relativeFile}${c.reset}`);
 
-    for (const link of broken) {
-      console.log(`  ${c.red}✗${c.reset} ${link.reference} ${c.dim}(line ${link.line}, col ${link.column})${c.reset}`);
-      console.log(`    ${c.dim}→ ${link.error}${c.reset}`);
+      for (const link of broken) {
+        console.log(`  ${c.red}✗${c.reset} ${link.reference} ${c.dim}(line ${link.line}, col ${link.column})${c.reset}`);
+        console.log(`    ${c.dim}→ ${link.error}${c.reset}`);
+      }
+      console.log('');
     }
-    console.log('');
+  }
+
+  // DEFAULT MODE: Show broken by target
+  const brokenRefsArray = Array.from(brokenByTarget.values());
+  const brokenByTargetOutput = formatBrokenReferencesByTarget(brokenRefsArray, {
+    noColor: options.noColor,
+    cwd: process.cwd(),
+  });
+  if (brokenByTargetOutput) {
+    console.log(brokenByTargetOutput);
   }
 
   // Summary
@@ -604,6 +784,11 @@ async function runCheck(args: string[]) {
   console.log(`  Files with broken refs: ${c.red}${filesWithBroken}${c.reset} / ${totalFiles}`);
   console.log(`  Total broken refs:      ${c.red}${totalBroken}${c.reset}`);
   console.log(`  Total valid refs:       ${c.green}${totalValid}${c.reset}`);
+
+  if (!options.verbose && filesWithBroken > 0) {
+    console.log('');
+    console.log(`${c.dim}💡 Use --verbose to see per-file breakdown${c.reset}`);
+  }
 
   process.exit(1);
 }
@@ -643,10 +828,23 @@ async function main() {
     process.exit(1);
   }
 
+  // Validate flag combinations
+  if (options.quiet && options.summary) {
+    console.error('Error: --quiet and --summary are incompatible');
+    console.log('Choose one: --quiet (shows errors only) OR --summary (shows compact stats)');
+    process.exit(1);
+  }
+  if (options.quiet && options.verbose) {
+    console.error('Error: --quiet and --verbose are incompatible');
+    process.exit(1);
+  }
+
   const ignorePatterns = options.ignore.map((p) => new RegExp(p));
   const results: Array<{ file: string; result: ValidationResult }> = [];
   let hasInvalid = false;
+  const startTime = Date.now();
 
+  // Validate all files
   for (const file of files) {
     if (!fs.existsSync(file)) {
       console.error(`Error: File not found: ${file}`);
@@ -657,22 +855,29 @@ async function main() {
     try {
       const fileDir = path.dirname(path.resolve(file));
       const workspaceRoot = findWorkspaceRoot(fileDir, options.workspaceRootPath);
-      const result = validateFile(file, { ignorePatterns, basePath: workspaceRoot });
+      const result = validateFile(file, {
+        ignorePatterns,
+        basePath: workspaceRoot,
+        shallow: options.shallow
+      });
       results.push({ file, result });
 
       if (result.invalid.length > 0) {
         hasInvalid = true;
       }
 
-      if (!options.quiet || result.invalid.length > 0) {
-        const output = formatValidationResult(result, {
-          noColor: options.noColor,
-          errorsOnly: options.quiet,
-          showFilePath: file,
-        });
-        if (output.trim()) {
-          console.log(output);
-          console.log('');
+      // Show per-file output ONLY in verbose mode (not in summary or default mode)
+      if (options.verbose && !options.summary) {
+        if (!options.quiet || result.invalid.length > 0) {
+          const output = formatValidationResult(result, {
+            noColor: options.noColor,
+            errorsOnly: false, // Show all refs in verbose mode
+            showFilePath: file,
+          });
+          if (output.trim()) {
+            console.log(output);
+            console.log('');
+          }
         }
       }
     } catch (err) {
@@ -681,8 +886,50 @@ async function main() {
     }
   }
 
-  if (results.length > 1) {
+  const duration = Date.now() - startTime;
+
+  // Output summary based on mode
+  if (options.summary) {
+    // Summary mode: show compact stats with broken refs
+    console.log(formatValidationSummary(results, {
+      noColor: options.noColor,
+      mode: options.shallow ? 'shallow' : 'recursive',
+      duration,
+      cwd: process.cwd(),
+    }));
+  } else {
+    // Default and verbose modes: show broken refs + summary
+    const cwd = process.cwd();
+
+    // Show broken references grouped by target (if any)
+    if (hasInvalid) {
+      const brokenByTarget = extractBrokenReferencesByTarget(results, cwd);
+      const brokenOutput = formatBrokenReferencesByTarget(brokenByTarget, {
+        noColor: options.noColor,
+        cwd,
+      });
+      if (brokenOutput) {
+        console.log(brokenOutput);
+        console.log('');
+      }
+    }
+
+    // Show summary stats
     console.log(formatSummary(results, { noColor: options.noColor }));
+
+    // Add mode hint with helpful tips
+    if (hasInvalid) {
+      console.log('');
+      const mode = options.shallow ? 'shallow' : 'recursive';
+      const c = options.noColor ? { yellow: '', dim: '', reset: '' } : { yellow: '\x1b[33m', dim: '\x1b[2m', reset: '\x1b[0m' };
+      console.log(`${c.yellow}⚠️  Broken references found (${mode} mode)${c.reset}`);
+
+      if (!options.shallow && results.length > 1) {
+        console.log('');
+        console.log(`${c.dim}💡 Use --verbose to see per-file breakdown${c.reset}`);
+        console.log(`${c.dim}💡 Use --shallow for faster validation of direct refs only${c.reset}`);
+      }
+    }
   }
 
   process.exit(hasInvalid ? 1 : 0);
