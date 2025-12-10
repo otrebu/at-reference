@@ -62,6 +62,12 @@ export interface ResolvedReference extends AtReference {
 export interface ValidateOptions extends ResolveOptions {
   /** Patterns to ignore (references matching these won't be validated) */
   ignorePatterns?: RegExp[];
+  /** Use shallow validation (non-recursive) - only check direct references */
+  shallow?: boolean;
+  /** Current file path being validated (used for recursive validation) */
+  currentFilePath?: string;
+  /** Internal: set of visited paths (used to prevent infinite loops in recursive validation) */
+  _visitedPaths?: Set<string>;
 }
 
 /**
@@ -92,4 +98,46 @@ export interface FormatOptions {
   errorsOnly?: boolean;
   /** Show file path being validated */
   showFilePath?: string;
+}
+
+/**
+ * Options for formatting validation summary
+ */
+export interface ValidationSummaryOptions {
+  /** Disable ANSI color codes */
+  noColor?: boolean;
+  /** Validation mode (recursive or shallow) */
+  mode: 'recursive' | 'shallow';
+  /** Duration in milliseconds */
+  duration?: number;
+  /** Current working directory for relative paths */
+  cwd?: string;
+}
+
+/**
+ * Broken reference grouped by target with source locations
+ */
+export interface BrokenReferenceByTarget {
+  /** The target path that was referenced */
+  targetPath: string;
+  /** The raw @reference string */
+  raw: string;
+  /** Error message explaining why it's broken */
+  error: string;
+  /** Source files that reference this broken target */
+  sources: Array<{
+    file: string;
+    line: number;
+    column: number;
+  }>;
+}
+
+/**
+ * Options for formatting broken references by target
+ */
+export interface FormatBrokenByTargetOptions {
+  /** Disable ANSI color codes */
+  noColor?: boolean;
+  /** Current working directory for relative paths */
+  cwd?: string;
 }
