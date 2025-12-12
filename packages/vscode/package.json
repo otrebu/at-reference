@@ -93,6 +93,11 @@
           "type": "number",
           "default": 10,
           "description": "Number of lines to show in hover preview"
+        },
+        "atReference.compile.optimizeDuplicates": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include each file once, use self-closing tags for duplicate references"
         }
       }
     }

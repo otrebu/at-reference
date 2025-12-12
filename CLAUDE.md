@@ -45,9 +45,10 @@ pnpm typecheck   # Type checking only
 1. **parser.ts** - Extract @ references via regex (handles code spans, emails)
 2. **resolver.ts** - Convert relative paths to absolute (handles ./, ../, index files, extensions)
 3. **validator.ts** - Check file existence (recursive by default, `--shallow` for direct refs only)
-4. **compiler.ts** - Expand references inline with `<file path="...">` tags, detect circular deps
-5. **dependency-graph.ts** - Build dependency graphs, topological sort (for folder compilation)
-6. **cli.ts** - Commands: `validate` (default), `check`, `compile`
+4. **compiler.ts** - Expand references inline with `<file path="...">` tags, detect circular deps, adjust heading levels
+5. **heading-adjuster.ts** - Shift heading levels based on import context (always enabled)
+6. **dependency-graph.ts** - Build dependency graphs, topological sort (for folder compilation)
+7. **cli.ts** - Commands: `validate` (default), `check`, `compile`
 
 **Reference Pattern:** `@path/to/file` or `@./relative/path`
 - Must contain `/` or file extension to avoid email conflicts
@@ -84,21 +85,92 @@ at-ref CLAUDE.md --shallow
 
 #### Single File Compilation
 ```bash
-# Basic compilation
+# Basic compilation (frontmatter always stripped)
 at-ref compile input.md -o output.md
 
-# Optimization flags (64% size reduction)
-at-ref compile input.md -o output.md --skip-frontmatter --optimize-duplicates
+# Optimization flags (massive size reduction)
+at-ref compile input.md -o output.md --optimize-duplicates
 ```
 
-- `--skip-frontmatter` - Strips YAML frontmatter from output
+- Frontmatter is ALWAYS stripped from compiled output
 - `--optimize-duplicates` - Include each file once, use `<file path="..." />` for subsequent refs
+- File content wrapped with double newlines: `<file path="...">\n\n[content]\n\n</file>`
+- **Heading normalization (default)** - Preserves relative heading hierarchy within imported files
+- `--additive-headings` - Use legacy additive heading shift mode
+
+#### Heading Level Adjustment
+
+Heading adjustment is **always enabled** by default. There are two modes:
+
+**Normalize Mode (Default):**
+Preserves the relative heading hierarchy within imported files. The first heading of imported content is normalized to `context level + 1`, and all other headings maintain their relative positions.
+
+**Additive Mode (`--additive-headings`):**
+Legacy behavior that adds the context level to all heading levels cumulatively.
+
+**Example showing the difference:**
+```markdown
+parent.md:
+# Parent Title
+## Section
+@child.md
+
+child.md:
+## Commander
+### Usage
+#### Example
+```
+
+**Normalize mode output (default):**
+```markdown
+# Parent Title
+## Section
+### Commander       ← h2 normalized to h3 (context=h2, target=h3, shift=+1)
+#### Usage          ← relative hierarchy preserved (+1)
+##### Example       ← relative hierarchy preserved (+1)
+```
+
+**Additive mode output (`--additive-headings`):**
+```markdown
+# Parent Title
+## Section
+#### Commander      ← h2 + shift(2) = h4
+##### Usage         ← h3 + shift(2) = h5
+###### Example      ← h4 + shift(2) = h6
+```
+
+**Key behaviors:**
+- **Normalize mode**: First heading → `context + 1`, preserves relative differences
+- **Additive mode**: All headings → `heading + context level` (cumulative through nesting)
+- **Context detection**: Level determined by last heading before @reference
+- **H1-H6 clamping**: Headings clamped to valid markdown range (h1-h6)
+- **Warning on clamp**: Console warning emitted when headings are clamped
+- **Code block preservation**: Headings inside ``` code blocks are NOT shifted
+- **No preceding heading**: Target = h1 in normalize mode, no shift in additive mode
+
+**Nested import example (normalize mode):**
+```markdown
+A.md:  # Root → ## Section → @B.md
+B.md:  ### B Title → #### B Sub → @C.md
+C.md:  ## C Title → ### C Sub
+
+Step 1: C imported into B (context=h4, target=h5)
+  C: h2→h5, h3→h6 (shift=+3)
+
+Step 2: B+C imported into A (context=h2, target=h3)
+  B starts at h3, target=h3, shift=0
+  All headings in B (including C) unchanged
+
+Result:
+  B: h3, h4 (unchanged)
+  C: h5, h6 (from step 1)
+```
 
 #### Folder Compilation
 
 ```bash
 # Compile entire directory with bottom-up ordering
-# Frontmatter automatically skipped in folder mode
+# Frontmatter always stripped from all files
 at-ref compile docs/ --optimize-duplicates
 ```
 
@@ -107,7 +179,7 @@ at-ref compile docs/ --optimize-duplicates
 - **Bottom-up compilation** - Dependencies compiled before dependents
 - **Cross-file cache** - Shared `importCounts` and `importedFiles` maps across all compilations
 - **Structure preservation** - Mirrors source directory hierarchy in `dist/`
-- **Auto-skip frontmatter** - YAML frontmatter automatically stripped in folder mode
+- **Frontmatter stripping** - YAML frontmatter always stripped from all compiled files
 - **Massive optimization** - With `--optimize-duplicates`, shared deps included once across ALL files
 
 ### VS Code Extension Providers
@@ -124,13 +196,14 @@ packages/core/
     parser.ts          # Regex extraction
     resolver.ts        # Path resolution
     validator.ts       # File validation
-    compiler.ts        # Reference expansion (recursive, circular detection, folder compilation)
+    compiler.ts        # Reference expansion (recursive, circular detection, folder compilation, heading adjustment)
+    heading-adjuster.ts # Heading level shifting based on context
     dependency-graph.ts # Graph building, topological sort, cycle detection
     formatter.ts       # CLI output (ANSI colors)
     tree-formatter.ts  # Hierarchical import graph
     cli.ts            # Command dispatcher (single file + folder modes)
     types.ts          # TypeScript interfaces
-    __tests__/        # Unit tests (parser, resolver, validator, compiler, dependency-graph, folder-compile)
+    __tests__/        # Unit tests (parser, resolver, validator, compiler, dependency-graph, folder-compile, heading-adjuster)
 
 packages/vscode/
   src/
@@ -169,7 +242,7 @@ packages/vscode/
 - **Default Behavior**: `validateFile()` uses recursive mode by default unless `shallow: true` is passed
 
 ### Frontmatter Handling
-Optional `--skip-frontmatter` flag strips YAML frontmatter (between `---` delimiters) from compiled output.
+YAML frontmatter (between `---` delimiters) is ALWAYS stripped from compiled output. This is non-optional and ensures clean output without metadata.
 
 ### Duplicate Optimization
 `--optimize-duplicates` includes each file's content once, subsequent references use self-closing tags `<file path="..." />`.

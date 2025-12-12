@@ -141,3 +141,25 @@ export interface FormatBrokenByTargetOptions {
   /** Current working directory for relative paths */
   cwd?: string;
 }
+
+/**
+ * A markdown heading
+ */
+export interface Heading {
+  /** Heading level (1-6) */
+  level: number;
+  /** Character position in content */
+  position: number;
+  /** Heading text (without # markers) */
+  text: string;
+}
+
+/**
+ * Heading context information for a reference
+ */
+export interface HeadingContext {
+  /** Level of last heading before this reference (0 = no preceding heading) */
+  contextLevel: number;
+  /** Amount to shift headings in imported content */
+  shiftAmount: number;
+}

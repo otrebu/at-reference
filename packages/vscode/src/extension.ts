@@ -1,13 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
 import { AtReferenceLinkProvider } from './providers/documentLinkProvider';
 import { AtReferenceDiagnosticsProvider } from './providers/diagnosticsProvider';
 import { AtReferenceHoverProvider } from './providers/hoverProvider';
 import { AtReferenceCompletionProvider } from './providers/completionProvider';
 import { AtReferenceDecorationProvider } from './providers/decorationProvider';
 import { getConfig } from './config';
-import { compileFile, getBuiltOutputPath } from '@at-reference/core';
+import { compileFile, compileFolder, getBuiltOutputPath } from '@at-reference/core';
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('At Reference Support activated');
@@ -78,7 +77,11 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       try {
-        const result = compileFile(filePath);
+        const compileConfig = getConfig();
+        const result = compileFile(filePath, {
+          basePath: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+          optimizeDuplicates: compileConfig.compileOptimizeDuplicates
+        });
 
         if (result.failedCount > 0) {
           const failedRefs = result.references
@@ -112,93 +115,37 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       const folderPath = uri.fsPath;
+      const compileConfig = getConfig();
 
-      // Find all markdown files in folder
-      const markdownFiles = findMarkdownFiles(folderPath);
+      // Output to dist/ at same level as folder (sibling)
+      const outputDir = path.join(path.dirname(folderPath), 'dist');
 
-      if (markdownFiles.length === 0) {
-        vscode.window.showInformationMessage('No markdown files found in folder');
-        return;
-      }
-
-      const results = await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: 'Compiling @references',
-          cancellable: false,
-        },
-        async (progress) => {
-          const compiled: Array<{ file: string; success: number; failed: number }> = [];
-          const totalFiles = markdownFiles.length;
-
-          for (const [index, file] of markdownFiles.entries()) {
-            progress.report({
-              message: `${index + 1}/${totalFiles}: ${path.basename(file)}`,
-              increment: (100 / totalFiles),
+      try {
+        const result = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Compiling @references...',
+            cancellable: false,
+          },
+          async () => {
+            return compileFolder(folderPath, {
+              outputDir,
+              basePath: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+              optimizeDuplicates: compileConfig.compileOptimizeDuplicates
             });
-
-            try {
-              const result = compileFile(file);
-              compiled.push({
-                file: path.basename(file),
-                success: result.successCount,
-                failed: result.failedCount,
-              });
-            } catch {
-              compiled.push({
-                file: path.basename(file),
-                success: 0,
-                failed: -1, // indicates error
-              });
-            }
           }
+        );
 
-          return compiled;
+        let message = `Compiled ${result.totalFiles} file(s) → ${path.basename(outputDir)}/`;
+        if (result.totalFailures > 0) {
+          message += ` (${result.totalFailures} unresolved reference(s))`;
         }
-      );
-
-      const totalSuccess = results.reduce((sum, r) => sum + r.success, 0);
-      const totalFailed = results.filter(r => r.failed > 0).length;
-      const totalErrors = results.filter(r => r.failed === -1).length;
-
-      let message = `Compiled ${markdownFiles.length} file(s), ${totalSuccess} reference(s) resolved`;
-      if (totalFailed > 0) {
-        message += `, ${totalFailed} file(s) with unresolved references`;
+        vscode.window.showInformationMessage(message);
+      } catch (err) {
+        vscode.window.showErrorMessage(`Failed to compile folder: ${err}`);
       }
-      if (totalErrors > 0) {
-        message += `, ${totalErrors} error(s)`;
-      }
-
-      vscode.window.showInformationMessage(message);
     })
   );
-}
-
-function findMarkdownFiles(dir: string): string[] {
-  const files: string[] = [];
-
-  function walk(currentDir: string) {
-    try {
-      const entries = fs.readdirSync(currentDir, { withFileTypes: true });
-
-      for (const entry of entries) {
-        const fullPath = path.join(currentDir, entry.name);
-
-        if (entry.isDirectory()) {
-          if (!['node_modules', '.git', 'dist'].includes(entry.name)) {
-            walk(fullPath);
-          }
-        } else if (entry.name.endsWith('.md') && !entry.name.includes('.built.')) {
-          files.push(fullPath);
-        }
-      }
-    } catch {
-      // Skip directories we can't read
-    }
-  }
-
-  walk(dir);
-  return files;
 }
 
 export function deactivate() {}

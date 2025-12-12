@@ -215,9 +215,9 @@ export function stripFrontMatter(content: string): string {
  */
 export function extractReferences(
   content: string,
-  options: ParseOptions & { skipFrontmatter?: boolean } = {}
+  options: ParseOptions = {}
 ): AtReference[] {
-  const { zeroIndexed = false, skipFrontmatter = false } = options;
+  const { zeroIndexed = false } = options;
   const references: AtReference[] = [];
   const lineOffsets = buildLineOffsets(content);
   const codeSpanRanges = findCodeSpanRanges(content);
@@ -236,11 +236,6 @@ export function extractReferences(
 
     // Skip references inside code spans (backticks)
     if (isInsideCodeSpan(refStart, codeSpanRanges)) {
-      continue;
-    }
-
-    // Skip references in front matter
-    if (skipFrontmatter && isInFrontMatter(content, refStart)) {
       continue;
     }
 

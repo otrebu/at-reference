@@ -6,6 +6,7 @@ export interface ExtensionConfig {
   enableHover: boolean;
   exclude: string[];
   previewLines: number;
+  compileOptimizeDuplicates: boolean;
 }
 
 export function getConfig(): ExtensionConfig {
@@ -17,5 +18,6 @@ export function getConfig(): ExtensionConfig {
     enableHover: config.get<boolean>('enableHover', true),
     exclude: config.get<string[]>('exclude', ['**/node_modules/**', '**/.git/**']),
     previewLines: config.get<number>('previewLines', 10),
+    compileOptimizeDuplicates: config.get<boolean>('compile.optimizeDuplicates', true),
   };
 }

@@ -4,6 +4,7 @@ import { extractReferences, stripFrontMatter } from './parser';
 import { resolvePath } from './resolver';
 import type { AtReference, ResolveOptions } from './types';
 import { buildDependencyGraph, topologicalSort, type DependencyGraph } from './dependency-graph';
+import { adjustHeadings, analyzeHeadingContext, normalizeHeadings } from './heading-adjuster';
 
 /**
  * Options for compiling @ references
@@ -15,10 +16,15 @@ export interface CompileOptions extends ResolveOptions {
   writeOutput?: boolean;
   /** Custom wrapper for file content (default: XML tags) */
   contentWrapper?: (content: string, filePath: string, ref: AtReference) => string;
-  /** Skip @references in front matter and strip it from output */
-  skipFrontmatter?: boolean;
   /** Only import each file once, use references for duplicates */
   optimizeDuplicates?: boolean;
+  /**
+   * Heading adjustment mode:
+   * - 'normalize' (default): Preserves relative heading hierarchy within imported files.
+   *   First heading of imported content is normalized to context level + 1.
+   * - 'additive': Legacy mode that adds context level to all headings cumulatively.
+   */
+  headingMode?: 'normalize' | 'additive';
 }
 
 /**
@@ -159,7 +165,7 @@ function getLanguageFromPath(filePath: string): string {
  * Default content wrapper - wraps in XML tags
  */
 function defaultContentWrapper(content: string, filePath: string, _ref: AtReference): string {
-  return `<file path="${filePath}">\n${content}\n</file>`;
+  return `<file path="${filePath}">\n\n${content}\n\n</file>`;
 }
 
 /**
@@ -200,6 +206,10 @@ export function getBuiltOutputPath(inputPath: string): string {
 
 /**
  * Recursively compile content, resolving @references and their nested references
+ *
+ * @param headingContext Interpretation depends on headingMode:
+ *   - 'normalize' mode: Parent context level (-1 = root file, don't normalize; >= 0 = normalize to contextLevel + 1)
+ *   - 'additive' mode: Cumulative heading shift to apply
  */
 function compileContentRecursive(
   content: string,
@@ -207,24 +217,25 @@ function compileContentRecursive(
   options: CompileOptions,
   pathStack: string[],
   importCounts: Map<string, number>,
-  importedFiles: Set<string>
+  importedFiles: Set<string>,
+  headingContext: number = -1
 ): { compiledContent: string; references: CompiledReference[] } {
   const {
     basePath = path.dirname(currentFilePath),
     contentWrapper = defaultContentWrapper,
     tryExtensions = [],
-    skipFrontmatter = false,
     optimizeDuplicates = false,
+    headingMode = 'normalize',
   } = options;
 
-  // Strip front matter if requested
-  let processedContent = content;
-  if (skipFrontmatter) {
-    processedContent = stripFrontMatter(content);
-  }
+  // Always strip front matter
+  const processedContent = stripFrontMatter(content);
 
-  const references = extractReferences(processedContent, { skipFrontmatter });
+  const references = extractReferences(processedContent);
   const compiledRefs: CompiledReference[] = [];
+
+  // Analyze heading context for each reference
+  const contextMap = analyzeHeadingContext(processedContent, references);
 
   // Use processedContent for compilation
   let compiledContent = processedContent;
@@ -298,6 +309,16 @@ function compileContentRecursive(
 
           let fileContent = fs.readFileSync(resolved.resolvedPath, 'utf-8');
 
+          // Calculate heading context for this import based on mode
+          const localContext = contextMap.get(ref.startIndex);
+          const localContextLevel = localContext?.contextLevel ?? 0;
+
+          // In normalize mode: pass the local context level (not cumulative)
+          // In additive mode: pass cumulative shift (headingContext + localContextLevel)
+          const childHeadingContext = headingMode === 'additive'
+            ? headingContext + localContextLevel
+            : localContextLevel;
+
           // Add to path stack for circular detection
           const newPathStack = [...pathStack, resolved.resolvedPath];
 
@@ -309,11 +330,13 @@ function compileContentRecursive(
             options,
             newPathStack,
             importCounts,
-            importedFiles
+            importedFiles,
+            childHeadingContext
           );
 
           // Use the recursively compiled content
           fileContent = nestedResult.compiledContent;
+
           compiledRef.content = fileContent;
 
           // Add nested references to our list
@@ -341,6 +364,22 @@ function compileContentRecursive(
 
   // Reverse to get original order
   compiledRefs.reverse();
+
+  // Apply heading adjustment after all references are expanded
+  if (headingMode === 'additive') {
+    // Additive mode: shift by cumulative amount, skip headings in <file> blocks (already adjusted)
+    if (headingContext > 0) {
+      compiledContent = adjustHeadings(compiledContent, headingContext, true, true);
+    }
+  } else {
+    // Normalize mode: normalize to target level = contextLevel + 1
+    // headingContext >= 0 means this is an imported file (not root which has -1)
+    // skipFileBlocks = false so nested imports ARE re-adjusted (normalization cascades)
+    if (headingContext >= 0) {
+      const targetLevel = headingContext + 1;
+      compiledContent = normalizeHeadings(compiledContent, targetLevel, true, false);
+    }
+  }
 
   return { compiledContent, references: compiledRefs };
 }
@@ -372,13 +411,20 @@ function compileFileWithCache(
   // Use the file's directory as the base path for resolution
   const effectiveBasePath = options.basePath ?? path.dirname(absoluteInputPath);
 
+  // Initial heading context:
+  // - For normalize mode: -1 means root file (don't normalize the root)
+  // - For additive mode: 0 means no cumulative shift yet
+  const headingMode = options.headingMode ?? 'normalize';
+  const initialHeadingContext = headingMode === 'additive' ? 0 : -1;
+
   const { compiledContent, references: compiledRefs } = compileContentRecursive(
     content,
     absoluteInputPath,
     { ...options, basePath: effectiveBasePath },
     pathStack,
     importCounts,
-    importedFiles
+    importedFiles,
+    initialHeadingContext
   );
 
   const successCount = compiledRefs.filter(r => r.found).length;
@@ -452,13 +498,18 @@ export function compileContent(
   // Initialize imported files set for optimization
   const importedFiles = new Set<string>();
 
+  // Initial heading context based on mode
+  const headingMode = options.headingMode ?? 'normalize';
+  const initialHeadingContext = headingMode === 'additive' ? 0 : -1;
+
   return compileContentRecursive(
     content,
     virtualFilePath,
     { ...options, basePath },
     pathStack,
     importCounts,
-    importedFiles
+    importedFiles,
+    initialHeadingContext
   );
 }
 

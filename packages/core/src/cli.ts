@@ -52,8 +52,8 @@ interface CompileCliOptions {
   outputDir?: string;
   noColor: boolean;
   workspaceRootPath?: string;
-  skipFrontmatter: boolean;
   optimizeDuplicates: boolean;
+  additiveHeadings: boolean;
   verbose: boolean;
   help: boolean;
 }
@@ -101,8 +101,8 @@ Compile Options:
   --output <path>         Output file (single file only)
   --output-dir <path>     Output directory (folder mode, default: dist/)
   --dist <path>           Alias for --output-dir
-  --skip-frontmatter      Skip @refs in front matter & strip it from output
   --optimize-duplicates   Only import each file once, use references for duplicates
+  --additive-headings     Use legacy additive heading shift (default: normalize)
   --no-color              Disable colored output
   --workspace-root-path   Explicit workspace root path
   --help                  Show this help message
@@ -240,8 +240,8 @@ function parseCompileArgs(args: string[]): CompileCliOptions {
   const options: CompileCliOptions = {
     files: [],
     noColor: false,
-    skipFrontmatter: false,
     optimizeDuplicates: false,
+    additiveHeadings: false,
     verbose: false,
     help: false,
   };
@@ -256,10 +256,10 @@ function parseCompileArgs(args: string[]): CompileCliOptions {
       options.noColor = true;
     } else if (arg === '--verbose') {
       options.verbose = true;
-    } else if (arg === '--skip-frontmatter') {
-      options.skipFrontmatter = true;
     } else if (arg === '--optimize-duplicates') {
       options.optimizeDuplicates = true;
+    } else if (arg === '--additive-headings') {
+      options.additiveHeadings = true;
     } else if (arg === '--output' || arg === '-o') {
       i++;
       const outputPath = args[i];
@@ -473,8 +473,8 @@ async function runSingleFileCompile(file: string, options: CompileCliOptions) {
     const result = compileFile(file, {
       outputPath,
       basePath: workspaceRoot,
-      skipFrontmatter: options.skipFrontmatter,
-      optimizeDuplicates: options.optimizeDuplicates
+      optimizeDuplicates: options.optimizeDuplicates,
+      headingMode: options.additiveHeadings ? 'additive' : 'normalize',
     });
 
     // Show broken references grouped by target (if any)
@@ -518,8 +518,8 @@ async function runFolderCompile(inputPaths: string[], options: CompileCliOptions
     const result = compileFolder(inputDir, {
       outputDir,
       basePath: workspaceRoot,
-      skipFrontmatter: true, // Default to true for folder mode
-      optimizeDuplicates: options.optimizeDuplicates
+      optimizeDuplicates: options.optimizeDuplicates,
+      headingMode: options.additiveHeadings ? 'additive' : 'normalize',
     });
 
     // In verbose mode, show per-file details
